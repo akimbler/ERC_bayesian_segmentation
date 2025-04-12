@@ -53,7 +53,7 @@ class AtlasDeformer(nn.Module):
         self.GAUSSIAN_LHOODS = torch.zeros([*self.Iskip_siz, self.num_gmm_components+1], **backend)
         self.GAUSSIAN_LHOODS[:, :, :, 0] = 1 / torch.sqrt(2 * math.pi * self.var_bg) * torch.exp(
             -0.5 * torch.pow(self.Iskip - self.mu_bg, 2.0) / self.var_bg)
-        for c in range(self.num_gmm_components):
+        for c in range(self.num_gmm_components - 1):
             self.GAUSSIAN_LHOODS[:, :, :, c+1] = 1.0 / torch.sqrt(2 * math.pi * self.vars[c]) * torch.exp(
                 -0.5 * torch.pow(self.Iskip - self.mus[c], 2.0) / self.vars[c])
 
