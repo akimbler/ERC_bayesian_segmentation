@@ -689,6 +689,11 @@ def get_tissue_settings(
         gmm_components = yaml.full_load(f)
 
     gmm_components = gmm_components["Number of components in a class"]
-    gmm_components =[list(x.values())[0] for x in gmm_components]
+    gmm_components = [list(x.values())[0] for x in gmm_components]
 
-    return atlas_indices, aseg_indices, np.array(all_labels_list), np.array(gmm_components)
+    return (
+        atlas_indices,
+        aseg_indices,
+        np.array(all_labels_list),
+        np.array(gmm_components),
+    )

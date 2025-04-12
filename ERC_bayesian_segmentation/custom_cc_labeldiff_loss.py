@@ -1,19 +1,25 @@
-'''
+"""
 Cross correlation
-'''
+"""
+
 from time import time, sleep
 import torch
 from torch.utils.checkpoint import checkpoint
 from torch import nn
 from torch.nn import functional as F
 from typing import Union, Tuple, List, Optional, Dict, Any, Callable
-#from fireants.types import ItemOrList
+
+# from fireants.types import ItemOrList
 from ext.fireants.types import ItemOrList
 import numpy as np
 
+
 @torch.jit.script
 def gaussian_1d(
-    sigma: torch.Tensor, truncated: float = 4.0, approx: str = "erf", normalize: bool = True
+    sigma: torch.Tensor,
+    truncated: float = 4.0,
+    approx: str = "erf",
+    normalize: bool = True,
 ) -> torch.Tensor:
     """
     one dimensional Gaussian kernel.
@@ -32,7 +38,11 @@ def gaussian_1d(
     Returns:
         1D torch tensor
     """
-    sigma = torch.as_tensor(sigma, dtype=torch.float, device=sigma.device if isinstance(sigma, torch.Tensor) else None)
+    sigma = torch.as_tensor(
+        sigma,
+        dtype=torch.float,
+        device=sigma.device if isinstance(sigma, torch.Tensor) else None,
+    )
     device = sigma.device
     if truncated <= 0.0:
         raise ValueError(f"truncated must be positive, got {truncated}.")
@@ -56,6 +66,7 @@ def gaussian_1d(
 def make_rectangular_kernel(kernel_size: int) -> torch.Tensor:
     return torch.ones(kernel_size)
 
+
 @torch.jit.script
 def make_triangular_kernel(kernel_size: int) -> torch.Tensor:
     fsize = (kernel_size + 1) // 2
@@ -65,13 +76,18 @@ def make_triangular_kernel(kernel_size: int) -> torch.Tensor:
     padding = (kernel_size - fsize) // 2 + fsize // 2
     return F.conv1d(f, f, padding=padding).reshape(-1)
 
+
 @torch.jit.script
 def make_gaussian_kernel(kernel_size: int) -> torch.Tensor:
     sigma = torch.tensor(kernel_size / 3.0)
-    kernel = gaussian_1d(sigma=sigma, truncated=(kernel_size // 2) * 1.0, approx="sampled", normalize=False) * (
-        2.5066282 * sigma
-    )
+    kernel = gaussian_1d(
+        sigma=sigma,
+        truncated=(kernel_size // 2) * 1.0,
+        approx="sampled",
+        normalize=False,
+    ) * (2.5066282 * sigma)
     return kernel[:kernel_size]
+
 
 @torch.jit.script
 def _separable_filtering_conv(
@@ -99,13 +115,17 @@ def _separable_filtering_conv(
         _reversed_padding = _padding[::-1]
 
         # translate padding for input to torch.nn.functional.pad
-        _reversed_padding_repeated_twice: list[list[int]] = [[p, p] for p in _reversed_padding]
+        _reversed_padding_repeated_twice: list[list[int]] = [
+            [p, p] for p in _reversed_padding
+        ]
         _sum_reversed_padding_repeated_twice: list[int] = []
         for p in _reversed_padding_repeated_twice:
             _sum_reversed_padding_repeated_twice.extend(p)
         # _sum_reversed_padding_repeated_twice: list[int] = sum(_reversed_padding_repeated_twice, [])
 
-        padded_input = F.pad(input_, _sum_reversed_padding_repeated_twice, mode=pad_mode)
+        padded_input = F.pad(
+            input_, _sum_reversed_padding_repeated_twice, mode=pad_mode
+        )
         # update input
         if spatial_dims == 1:
             input_ = F.conv1d(input=padded_input, weight=_kernel, groups=num_channels)
@@ -117,9 +137,12 @@ def _separable_filtering_conv(
             raise NotImplementedError(f"Unsupported spatial_dims: {spatial_dims}.")
     return input_
 
+
 @torch.jit.script
-def separable_filtering(x: torch.Tensor, kernels: ItemOrList[torch.Tensor], mode: str = "zeros") -> torch.Tensor:
-# def separable_filtering(x: torch.Tensor, kernels: ItemOrList[torch.Tensor], mode: str = "zeros") -> torch.Tensor:
+def separable_filtering(
+    x: torch.Tensor, kernels: ItemOrList[torch.Tensor], mode: str = "zeros"
+) -> torch.Tensor:
+    # def separable_filtering(x: torch.Tensor, kernels: ItemOrList[torch.Tensor], mode: str = "zeros") -> torch.Tensor:
     """
     Apply 1-D convolutions along each spatial dimension of `x`.
     Args:
@@ -153,7 +176,9 @@ def separable_filtering(x: torch.Tensor, kernels: ItemOrList[torch.Tensor], mode
     _paddings = [(k.shape[0] - 1) // 2 for k in _kernels]
     n_chs = x.shape[1]
     pad_mode = "constant" if mode == "zeros" else mode
-    return _separable_filtering_conv(x, _kernels, pad_mode, spatial_dims, _paddings, n_chs)
+    return _separable_filtering_conv(
+        x, _kernels, pad_mode, spatial_dims, _paddings, n_chs
+    )
 
 
 # dict
@@ -162,6 +187,7 @@ kernel_dict = {
     "triangular": make_triangular_kernel,
     "gaussian": make_gaussian_kernel,
 }
+
 
 class HybridDiceLabelDiffloss(nn.Module):
     """
@@ -207,7 +233,7 @@ class HybridDiceLabelDiffloss(nn.Module):
         self.ndim = spatial_dims
         if self.ndim != 3:
             raise ValueError("Unsupported ndim, only 3-d inputs are supported")
-        if reduction != 'mean':
+        if reduction != "mean":
             raise ValueError("Unsupported reduction, only mean is supported")
         self.reduction = reduction
         self.unsigned = unsigned
@@ -220,7 +246,9 @@ class HybridDiceLabelDiffloss(nn.Module):
         _kernel = kernel_dict[kernel_type]
         self.kernel = _kernel(self.kernel_size)
         self.kernel.requires_grad = False
-        self.kernel_nd, self.kernel_vol = self.get_kernel_vol()   # get nD kernel and its volume
+        self.kernel_nd, self.kernel_vol = (
+            self.get_kernel_vol()
+        )  # get nD kernel and its volume
         self.smooth_nr = float(smooth_nr)
         self.smooth_dr = float(smooth_dr)
         self.rel_weight_labeldiff = rel_weight_labeldiff
@@ -232,7 +260,12 @@ class HybridDiceLabelDiffloss(nn.Module):
             vol = torch.matmul(vol.unsqueeze(-1), self.kernel.unsqueeze(0))
         return vol, torch.sum(vol)
 
-    def forward(self, pred: torch.Tensor, target: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(
+        self,
+        pred: torch.Tensor,
+        target: torch.Tensor,
+        mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
         """
         Args:
             pred: the shape should be BNH[WD].
@@ -241,17 +274,21 @@ class HybridDiceLabelDiffloss(nn.Module):
             ValueError: When ``self.reduction`` is not "mean"".
         """
         if pred.ndim - 2 != 3:
-            raise ValueError(f"expecting pred with 3 spatial dimensions, got pred of shape {pred.shape}")
+            raise ValueError(
+                f"expecting pred with 3 spatial dimensions, got pred of shape {pred.shape}"
+            )
         if target.shape != pred.shape:
-            raise ValueError(f"ground truth has differing shape ({target.shape}) from pred ({pred.shape})")
+            raise ValueError(
+                f"ground truth has differing shape ({target.shape}) from pred ({pred.shape})"
+            )
         if mask is not None:
-            raise ValueError('Mask should always be None')
+            raise ValueError("Mask should always be None")
 
         # sum over kernel
         def cc_checkpoint_fn(target, pred, kernel, kernel_vol):
-            '''
+            """
             This function is used to compute the intermediate results of the loss.
-            '''
+            """
             t2, p2, tp = target * target, pred * pred, target * pred
             kernel, kernel_vol = kernel.to(pred), kernel_vol.to(pred)
             # kernel_nd = self.kernel_nd.to(pred)
@@ -263,7 +300,9 @@ class HybridDiceLabelDiffloss(nn.Module):
             p_sum = separable_filtering(pred, kernels=kernels_p)
             t2_sum = separable_filtering(t2, kernels=kernels_t)
             p2_sum = separable_filtering(p2, kernels=kernels_p)
-            tp_sum = separable_filtering(tp, kernels=kernels_t)  # use target device's output
+            tp_sum = separable_filtering(
+                tp, kernels=kernels_t
+            )  # use target device's output
             # average over kernel
             t_avg = t_sum / kernel_vol_t
             p_avg = p_sum / kernel_vol_p
@@ -276,35 +315,53 @@ class HybridDiceLabelDiffloss(nn.Module):
             #     = sum[t*p] - sum[t] * sum[p] / N
             #     = sum[t*p] - sum[t] * mean[p] = cross
             # the following is actually squared ncc
-            cross = (tp_sum.to(pred) - p_avg * t_sum.to(pred))  # on pred device
+            cross = tp_sum.to(pred) - p_avg * t_sum.to(pred)  # on pred device
             t_var = torch.max(
-                t2_sum - t_avg * t_sum, torch.as_tensor(self.smooth_dr, dtype=t2_sum.dtype, device=t2_sum.device)
+                t2_sum - t_avg * t_sum,
+                torch.as_tensor(
+                    self.smooth_dr, dtype=t2_sum.dtype, device=t2_sum.device
+                ),
             ).to(pred)
             p_var = torch.max(
-                p2_sum - p_avg * p_sum, torch.as_tensor(self.smooth_dr, dtype=p2_sum.dtype, device=p2_sum.device)
+                p2_sum - p_avg * p_sum,
+                torch.as_tensor(
+                    self.smooth_dr, dtype=p2_sum.dtype, device=p2_sum.device
+                ),
             )
             if self.unsigned:
-                ncc: torch.Tensor = (cross * cross + self.smooth_nr) / ((t_var * p_var) + self.smooth_dr)
+                ncc: torch.Tensor = (cross * cross + self.smooth_nr) / (
+                    (t_var * p_var) + self.smooth_dr
+                )
             else:
-                ncc: torch.Tensor = (cross + self.smooth_nr) / ((torch.sqrt(t_var) * torch.sqrt(p_var)) + self.smooth_dr)
+                ncc: torch.Tensor = (cross + self.smooth_nr) / (
+                    (torch.sqrt(t_var) * torch.sqrt(p_var)) + self.smooth_dr
+                )
             return ncc
-        
+
         if self.checkpointing:
-            ncc = checkpoint(cc_checkpoint_fn, target[:,0:1,:,:,:], pred[:,0:1,:,:,:], self.kernel, self.kernel_vol)
+            ncc = checkpoint(
+                cc_checkpoint_fn,
+                target[:, 0:1, :, :, :],
+                pred[:, 0:1, :, :, :],
+                self.kernel,
+                self.kernel_vol,
+            )
         else:
-            ncc = cc_checkpoint_fn(target[:,0:1,:,:,:], pred[:,0:1,:,:,:], self.kernel, self.kernel_vol)
+            ncc = cc_checkpoint_fn(
+                target[:, 0:1, :, :, :],
+                pred[:, 0:1, :, :, :],
+                self.kernel,
+                self.kernel_vol,
+            )
 
-        lnccloss = (1.0 - torch.mean(ncc))
+        lnccloss = 1.0 - torch.mean(ncc)
 
-        diff = torch.abs(target[:, 1:target.shape[1], :, :, :] - pred[:, 1:target.shape[1], :, :, :])
-        labeldiffloss = 0.5 * diff.sum(dim=1).mean([1,2,3])
+        diff = torch.abs(
+            target[:, 1 : target.shape[1], :, :, :]
+            - pred[:, 1 : target.shape[1], :, :, :]
+        )
+        labeldiffloss = 0.5 * diff.sum(dim=1).mean([1, 2, 3])
 
-        loss = lnccloss  + labeldiffloss * self.rel_weight_labeldiff
+        loss = lnccloss + labeldiffloss * self.rel_weight_labeldiff
 
-        return (loss/(1.0 + self.rel_weight_labeldiff))
-
-
-
-
-
-
+        return loss / (1.0 + self.rel_weight_labeldiff)
